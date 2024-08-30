@@ -1,3 +1,4 @@
+#include <EEPROM.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <SPI.h>
@@ -22,6 +23,7 @@
 #define LED_PIN 7          // กำหนดหมายเลขพินสำหรับ LED
 #define I2CADDR 0x20       // กำหนดที่อยู่ I2C สำหรับ Keypad
 #define MAX_CART_ITEMS 10  // กำหนดจำนวนสูงสุดของสินค้าในตะกร้า
+#define EEPROM_START_ADDR 0
 
 const byte ROWS = 4;           // จำนวนแถวใน Keypad
 const byte COLS = 4;           // จำนวนคอลัมน์ใน Keypad
@@ -43,6 +45,7 @@ TM1637Display display(CLK, DIO);                                                
 
 tmElements_t tm;                //for DS1307
 volatile int count = 0;         // ตัวแปรนับถอยหลัง (volatile เพราะใช้ใน ISR)
+
 int buttonPressed = -1;         // ตัวแปรเก็บปุ่มที่กดไว้
 int cartItems[MAX_CART_ITEMS];  // อาร์เรย์เก็บรายการสินค้าในตะกร้า
 int cartCount = 0;              // จำนวนสินค้าที่อยู่ในตะกร้า
@@ -65,7 +68,30 @@ char lastKey = NO_KEY;  // ปุ่มสุดท้ายที่ถูก�
 String currentDisplay = "";  // ข้อความที่แสดงใน LCD
 bool countingDown = false;   // ตัวแปรสถานะสำหรับการนับถอยหลัง
 
+void saveProductAmountsToEEPROM() {
+  for (int i = 0; i < 9; i++) {
+    EEPROM.put(EEPROM_START_ADDR + i * sizeof(int), product_amount[i]);
+  }
+}
+
+void loadProductAmountsFromEEPROM() {
+  for (int i = 0; i < 9; i++) {
+    EEPROM.get(EEPROM_START_ADDR + i * sizeof(int), product_amount[i]);
+  }
+}
+
+void clearEEPROM() {
+  for (int i = 0; i < EEPROM.length(); i++) {
+    EEPROM.write(i, 0xFF);
+  }
+}
+
 void setup() {
+  initial();
+  loadProductAmountsFromEEPROM();
+}
+
+void initial() {
   Serial.begin(9600);                  // เริ่มต้นการสื่อสาร Serial ที่ 9600 bps
   pinMode(sw_restock, INPUT);          // ตั้งพินรีสต๊อกเป็น input
   pinMode(LED_PIN, OUTPUT);            // ตั้งพิน LED เป็น output
@@ -106,25 +132,38 @@ void loop() {
         lastDebounceTime = currentTime;                       // อัปเดตเวลาที่ปุ่มกด
         lastKey = key;                                        // อัปเดตปุ่มสุดท้ายที่กด
 
-        if (key >= '1' && key <= '9') {                              // ถ้าปุ่มที่กดเป็น '1'-'9'
-          int buttonIndex = key - '1';                               // แปลง '1'-'9' เป็น 0-8
-          buttonPressed = buttonIndex;                               // ตั้งค่าปุ่มที่กดเพื่อประมวลผลการทำรายการ
-          displaySnackAndPrice(buttonIndex);                         // แสดงข้อมูลสินค้าและราคา
-          count = 15;                                                // เริ่มต้นการนับถอยหลัง
-          countingDown = true;                                       // ตั้งค่าเป็นโหมดการนับถอยหลัง
-        } else if (key == 'A') {                                     // ถ้าปุ่มที่กดเป็น 'A'
-          addItemToCart(buttonPressed);                              // เพิ่มสินค้าไปที่ตะกร้า
-                                                                     // ไม่ทำการรีเซ็ต countdown
-        } else if (key == '*') {                                     // ถ้าปุ่มที่กดเป็น '*'
-          displayCartTotal();                                        // แสดงยอดรวมของตะกร้า
-          countingDown = false;                                      // หยุดการนับถอยหลัง
+        if (key >= '1' && key <= '9') {            // ถ้าปุ่มที่กดเป็น '1'-'9'
+          int buttonIndex = key - '1';             // แปลง '1'-'9' เป็น 0-8
+          buttonPressed = buttonIndex;             // ตั้งค่าปุ่มที่กดเพื่อประมวลผลการทำรายการ
+          displaySnackAndPrice(buttonIndex);       // แสดงข้อมูลสินค้าและราคา
+          count = 30;
+          countingDown = true;                     // ตั้งค่าเป็นโหมดการนับถอยหลัง
+        } else if (key == 'A') {                   // ถ้าปุ่มที่กดเป็น 'A'
+          int quantity = 1;                        // Function to get quantity input from the user
+          addItemToCart(buttonPressed, quantity);  // Call the updated function with quantity
+        } else if (key == 'B') {                   // ถ้าปุ่มที่กดเป็น B
+          int quantity = getQuantityFromUser();    // Function to get quantity input from the user
+          addItemToCart(buttonPressed, quantity);  // Call the updated function with quantity
+        } else if (key == 'D') {
+          setProductAmount(buttonPressed);
+        } else if (key == '*') {  // ถ้าปุ่มที่กดเป็น '*'
+          displayCartTotal();     // แสดงยอดรวมของตะกร้า
+          countingDown = false;   // หยุดการนับถอยหลัง
           displayCurrentTime();
-        } else if (key == '0') {                                     // ถ้าปุ่มที่กดเป็น '0'
-          lcd.setCursor(0, 0);                                       // ตั้งตำแหน่ง cursor เป็น (0,0)
-          displayMessage("  Reset system!   ");                      // แสดงข้อความ "Reset system!"
-          lcd.setCursor(0, 1);                                       // ตั้งตำแหน่ง cursor เป็น (0,1)
-          lcd.print("Please try again");                             // แสดงข้อความ "Please try again"
-          resetSystem();                                             // รีเซ็ตระบบ
+        } else if (key == '0') {  // ถ้าปุ่มที่กดเป็น '0'
+          timeout = false;
+          countingDown = false;
+          lcd.setCursor(0, 0);                   // ตั้งตำแหน่ง cursor เป็น (0,0)
+          displayMessage("  Reset system!   ");  // แสดงข้อความ "Reset system!"
+          lcd.setCursor(0, 1);                   // ตั้งตำแหน่ง cursor เป็น (0,1)
+          lcd.print("Please try again");         // แสดงข้อความ "Please try again"
+          clearEEPROM();                         // รีเซ็ตระบบ
+          lcd.clear();
+          lcd.setCursor(0, 0);
+          lcd.print("   Return to   ");
+          lcd.setCursor(0, 1);
+          lcd.print("   Main Menu   ");
+          setup();
         }
       }
     }
@@ -143,7 +182,9 @@ void loop() {
   }
 
   if (digitalRead(sw_restock) == LOW) {  // ถ้าปุ่มรีสต๊อกถูกกด
-    restockProduct();                    // ทำการรีสต๊อกสินค้า
+    timeout = false;
+    countingDown = false;
+    restockProduct();  // ทำการรีสต๊อกสินค้า
   }
 
   if (!timeout) {  // ถ้าไม่มีสถานะ timeout
@@ -160,6 +201,13 @@ void loop() {
     lcd.setCursor(0, 1);               // ตั้งตำแหน่ง cursor เป็น (0,1)
     lcd.print("Please try again");     // แสดงข้อความ "Please try again"
     timeout = false;                   // รีเซ็ตสถานะ timeout
+    countingDown = false;
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("   Return to   ");
+    lcd.setCursor(0, 1);
+    lcd.print("   Main Menu   ");
+    initial();
   }
 }
 
@@ -230,29 +278,137 @@ void readCard() {
   isCardDetected = true;   // ตั้งค่าสถานะการตรวจจับบัตรเป็น true
   rfid.PICC_HaltA();       // หยุดการสื่อสารกับบัตร
   rfid.PCD_StopCrypto1();  // หยุดการเข้ารหัสของ PCD
-  delay(1000);             // รอ 1 วินาที
+  delay(200);              // รอ 1 วินาที
 }
 
 void enableCard() {
   cardEnabled = true;  // เปิดการใช้งานบัตร
 }
 
-void updateProduct(int index) {
+void updateProduct(int index, int quantity) {
   if (index >= 0 && index < 9 && product_amount[index] > 0) {  // ถ้าดัชนีถูกต้องและสินค้ามีอยู่
-    product_amount[index]--;                                   // ลดจำนวนสินค้าลง 1
+    product_amount[index] -= quantity;                         // ลดจำนวนสินค้าลง
+    saveProductAmountsToEEPROM();
+    if (product_amount[index] == 0) {
+      Serial.print(snacks[index]);
+      Serial.println(": OUT OF STOCK ");
+    } else {
+      Serial.print(snacks[index]);
+      Serial.print(" remaining: ");
+      Serial.println(product_amount[index]);
+    }
   }
 }
 
-void addItemToCart(int index) {
-  if (cartCount < MAX_CART_ITEMS && index >= 0 && index < 9) {  // ถ้าตะกร้ายังไม่เต็มและดัชนีถูกต้อง
-    cartItems[cartCount] = index;                               // เพิ่มรายการสินค้าไปที่ตะกร้า
-    cartCount++;                                                // เพิ่มจำนวนสินค้าในตะกร้า
-    cartTotal += prices[index];                                 // เพิ่มราคาสินค้าไปที่ยอดรวม
-    updateProduct(index);                                       // อัปเดตจำนวนสินค้าคงเหลือ
-    String message = "Added " + String(snacks[index]);
-    displayMessage(message);
+void setProductAmount(int index) {
+  // Temporary variable to store the quantity input from the Keypad
+  int quantity = 0;
+  int multiplier = 1;
+  bool inputComplete = false;
+
+  // Display prompt for user to enter quantity
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Restock quantity:");
+
+  // Loop to get quantity from Keypad
+  while (!inputComplete) {
+    char key = keypad.getKey();  // Read the key pressed on the Keypad
+
+    if (key) {
+      if (key >= '0' && key <= '9') {  // If the key pressed is a digit
+        int num = key - '0';           // Convert character to integer
+        quantity = quantity + num * multiplier;
+        multiplier *= 10;
+
+        // Display the current quantity input
+        lcd.setCursor(0, 1);
+        lcd.print("Qty: ");
+        lcd.print(quantity);
+
+      } else if (key == 'A') {  // If the '#' key is pressed, finish input
+        inputComplete = true;
+      } else if (key == 'C') {  // If '*' is pressed, cancel and reset
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Canceled");
+        delay(200);  // Show cancellation for a short period
+        return;
+      }
+    }
+  }
+
+  // Check if the quantity is valid
+  if (quantity > 0 && index >= 0 && index < 9) {
+    // Update product amount
+    product_amount[index] = quantity;
+
+    saveProductAmountsToEEPROM();
+    // Display update confirmation
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Updated");
+    lcd.setCursor(0, 1);
+    lcd.print(snacks[index]);
+    lcd.print(": ");
+    lcd.print(product_amount[index]);
+    lcd.print(" left");
+    delay(2000);  // Display for 2 seconds
   } else {
-    displayMessage("Cart full");  // ถ้าตะกร้าเต็มหรือดัชนีไม่ถูกต้อง, แสดงข้อความ "Cart full"
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Invalid input");
+    delay(2000);  // Show error message for 2 seconds
+  }
+}
+
+int getQuantityFromUser() {
+  int quantity = 0;
+  int multiplier = 1;
+  bool inputComplete = false;
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("add quantity:");
+
+  while (!inputComplete) {
+    char key = keypad.getKey();
+
+    if (key) {
+      if (key >= '0' && key <= '9') {
+        int num = key - '0';
+        quantity = quantity + num * multiplier;
+        multiplier *= 10;
+        lcd.setCursor(0, 1);
+        lcd.print("Qty: ");
+        lcd.print(quantity);
+      } else if (key == 'A') {
+        inputComplete = true;
+      } else if (key == 'C') {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Canceled");
+        delay(200);
+        break;  // แก้ Error add item 0 quantity
+      }
+    }
+  }
+
+  return quantity;  // Return the final quantity
+}
+
+void addItemToCart(int index, int quantity) {
+  if (cartCount <= MAX_CART_ITEMS && index >= 0 && index < 9) {  // Check if there is enough space in the cart
+    if (product_amount[index] >= quantity) {                     // Check if there is enough stock
+      cartTotal += prices[index] * quantity;                     // Add the total price of the added items to cartTotal
+      String message = "Added " + String(quantity) + " " + snacks[index];
+      updateProduct(index, quantity);  // Update stock quantity
+      displayMessage(message);         // Show message on LCD
+    } else {
+      displayMessage("Not enough stock");  // Display message if stock is insufficient
+    }
+  } else {
+    displayMessage("Cart full");  // Display message if the cart is full
   }
 }
 
@@ -261,15 +417,15 @@ void processTransaction() {
   lcd.clear();                 // เคลียร์ LCD
   lcd.setCursor(0, 0);         // ตั้งตำแหน่ง cursor เป็น (0,0)
   lcd.print("Processing...");  // แสดงข้อความ "Processing..."
-  delay(1000);
+  delay(200);
   digitalWrite(LED_PIN, LOW);
   lcd.clear();              // เคลียร์ LCD
   lcd.setCursor(0, 0);      // ตั้งตำแหน่ง cursor เป็น (0,0)
   lcd.print("Thank you!");  // แสดงข้อความ "Thank you!"
-  delay(1000);              // รอ 2 วินาที
+  delay(200);               // รอ 2 วินาที
   calculateTotalIncome(buttonPressed);
-  delay(1000);
-  setup();
+  delay(200);
+  initial();
 }
 
 void calculateTotalIncome(int index) {
@@ -285,19 +441,37 @@ void restockProduct() {
   for (int i = 0; i < 9; i++) {  // ทำซ้ำสำหรับทุกสินค้า
     product_amount[i] = 4;       // รีเซ็ตจำนวนสินค้าคงเหลือเป็น 4
   }
-  Serial.println("Restock complete!");  // แสดงข้อความใน Serial Monitor
+  saveProductAmountsToEEPROM();
   displayMessage(" Restocking... ");    // แสดงข้อความ "Restocking..."
-  delay(2000);                          // รอ 2 วินาที
+  delay(200);                           // รอ 1 วินาที
   displayMessage("Restock complete");   // แสดงข้อความ "Restock complete"
-  delay(2000);                          // รอ 2 วินาที
+  Serial.println("Restock complete!");  // แสดงข้อความใน Serial Monitor
+  delay(200);                           // รอ 1 วินาที
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("   Return to   ");
+  lcd.setCursor(0, 1);
+  lcd.print("   Main Menu   ");
+  setup();
   return;
 }
 
-void resetSystem() {
-  wdt_enable(WDTO_15MS);  // เปิดใช้งาน Watchdog Timer ด้วยเวลา 15ms
-  while (1) {}            // วนลูปไม่สิ้นสุดเพื่อกระตุ้นการรีเซ็ต Watchdog Timer
-}
+// void resetSystem() {
+//   wdt_enable(WDTO_15MS);  // เปิดใช้งาน Watchdog Timer ด้วยเวลา 15ms
+//   while (1) {}            // วนลูปไม่สิ้นสุดเพื่อกระตุ้นการรีเซ็ต Watchdog Timer
+// }
 
 ISR(TIMER1_OVF_vect) {
   count--;  // ลดค่า count ลง 1 ทุกครั้งที่ Timer 1 overflow
 }
+
+// ISR(TIMER1_COMPA_vect) {
+//   if (countStarted && !countFinished) {
+//     if (millisRemaining == 0) {
+//       countFinished = true;
+//       lastBlinkTime = millis();
+//     } else {
+//       millisRemaining--;
+//     }
+//   }
+// }
