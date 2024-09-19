@@ -13,8 +13,6 @@
 #define CLK 3              // กำหนดหมายเลขพินสำหรับ CLK ของ TM1637
 #define RST_PIN 9          // กำหนดหมายเลขพินสำหรับการรีเซ็ตของ RFID
 #define SS_PIN 10          // กำหนดหมายเลขพินสำหรับ SS (Slave Select) ของ RFID
-#define BUZZER_PIN 8       // กำหนดหมายเลขพินสำหรับ Buzzer
-#define LED_PIN 7          // กำหนดหมายเลขพินสำหรับ LED
 #define I2CADDR 0x20       // กำหนดที่อยู่ I2C สำหรับ Keypad
 #define MAX_CART_ITEMS 10  // กำหนดจำนวนสูงสุดของสินค้าในตะกร้า
 #define EEPROM_START_ADDR 0
@@ -31,8 +29,15 @@ byte rowPins[ROWS] = { 7, 6, 5, 4 };                                            
 byte colPins[COLS] = { 3, 2, 1, 0 };                                             // กำหนดหมายเลขพินของคอลัมน์ใน Keypad
 Keypad_I2C keypad(makeKeymap(hexaKeys), rowPins, colPins, ROWS, COLS, I2CADDR);  // สร้างวัตถุ Keypad_I2C
 LiquidCrystal_I2C lcd(0x27, 16, 2);                                              // สร้างวัตถุ LCD I2C
-MFRC522 rfid(SS_PIN, RST_PIN);                                                   // สร้างวัตถุ RFID
-TM1637Display display(CLK, DIO);                                                 // สร้างวัตถุ TM1637Display
+
+MFRC522 rfid(SS_PIN, RST_PIN);  // สร้างวัตถุ RFID
+
+// Authentication key
+MFRC522::MIFARE_Key key;
+const byte block = 4;
+const byte trailerBlock = 7;
+
+TM1637Display display(CLK, DIO);  // สร้างวัตถุ TM1637Display
 const char *monthName[12] = {
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
@@ -45,8 +50,6 @@ struct CartItem {
 
 tmElements_t tm;  //for DS1307
 
-bool isCardDetected = false;  // ตัวแปรตรวจสอบการตรวจจับบัตร
-bool cardEnabled = true;      // ตัวแปรเปิดหรือปิดการใช้บัตร
 bool timeout = false;         // ตัวแปรตรวจสอบการหมดเวลา
 bool dotOn = true;            // สถานะปัจจุบันของจุดสองจุด
 bool countingDown = false;    // ตัวแปรสถานะสำหรับการนับถอยหลัง
@@ -130,8 +133,6 @@ void setup() {
 
 void initial() {
   pinMode(sw_restock, INPUT);   // Set pin for restocking as input
-  pinMode(LED_PIN, OUTPUT);     // Set pin LED as output
-  pinMode(BUZZER_PIN, OUTPUT);  // Set pin Buzzer as output
 
   lcd.init();                          // Initialize LCD
   lcd.backlight();                     // Turn on LCD backlight
@@ -140,8 +141,21 @@ void initial() {
   lcd.setCursor(0, 1);                 // Set cursor position to (0,1)
   lcd.print("billing Machine");        // Display "Vending Machine" on LCD
 
-  SPI.begin();               // Initialize SPI communication
-  rfid.PCD_Init();           // Initialize RFID
+  SPI.begin();      // Initialize SPI communication
+  rfid.PCD_Init();  // Initialize RFID
+  rfid.PCD_DumpVersionToSerial();
+
+  // Prepare the key
+  for (byte i = 0; i < 6; i++) {
+    key.keyByte[i] = 0xFF;
+  }
+
+  Serial.println(F("====================================================="));
+  Serial.println(F("SET CARD BALANCE"));
+  Serial.println(F("====================================================="));
+  Serial.print(F("Using key:"));
+  dump_byte_array(key.keyByte, MFRC522::MF_KEY_SIZE);
+
   display.clear();           // Clear TM1637 Display
   display.setBrightness(7);  // Set brightness of TM1637 Display
   Wire.begin();              // Initialize I2C communication
@@ -214,7 +228,6 @@ void loop() {
           addItemToCart(buttonPressed, quantity);  // Call the updated function with quantity
         } else if (key == 'C') {
           CancelProductsInCart();
-          // CancelProduct(buttonPressed, quantity);
         } else if (key == 'D') {
           setProductAmount(buttonPressed);
         } else if (key == '*') {  // ถ้าปุ่มที่กดเป็น '*'
@@ -255,12 +268,19 @@ void loop() {
     restockProduct();  // ทำการรีสต๊อกสินค้า
   }
 
-  if (!timeout) {                                         // ถ้าไม่มีสถานะ timeout
-    readCard();                                           // อ่านบัตร
-    if ((isCardDetected && cardEnabled) || key == '#') {  // ถ้าค้นพบบัตรและเปิดใช้งาน
-      count = 0;                                          // รีเซ็ตการนับถอยหลัง
-      display.showNumberDec(count, false);                // แสดงการนับถอยหลังเป็น 0 บน TM1637
-      processTransaction();                               // ประมวลผลการทำรายการ
+  if (!timeout) {                                                        // ถ้าไม่มีสถานะ timeout
+                                                                         // readCard();                                           // อ่านบัตร
+    if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) {  // ถ้าค้นพบบัตรและเปิดใช้งาน
+      return;
+    } else {
+      count = 0;                            // รีเซ็ตการนับถอยหลัง
+      display.showNumberDec(count, false);  // แสดงการนับถอยหลังเป็น 0 บน TM1637
+      Serial.println(F("A new card has appeared"));
+      totalIncome = TotlatIncome();  // รับค่าที่คืนกลับ
+      processCard(totalIncome);      // ส่ง TotalIncome ไปยัง processCard
+      delay(1500);
+      processTransaction();
+      totalIncome = 0.00;
     }
   } else {
     displayMessage("  Time out!   ");  // แสดงข้อความ "Time out!"
@@ -334,37 +354,136 @@ void displayMessage(String message) {
   }
 }
 
-void enableCard() {
-  cardEnabled = true;  // Enable card reading
+void processCard(float totalIncome) {
+  if (block != 4) {
+    Serial.print(F("Invalid block: "));
+    Serial.println(block);
+    halt();
+    return;
+  }
+
+  Serial.print(F("Card UID: "));
+  dump_byte_array(rfid.uid.uidByte, rfid.uid.size);
+
+  if (!authenticateCard()) return;
+
+  int currentAmount = readBalance();
+  if (currentAmount < 0) return;
+
+  int newAmount = currentAmount - totalIncome;
+  if (newAmount < 0) {
+    Serial.println(F("Amount after decrease is negative. Setting to 0."));
+    newAmount = 0;
+  }
+
+  writeBalance(newAmount);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Update amount: ");
+  lcd.setCursor(0, 1);
+  lcd.print(newAmount);
+  lcd.print(" Bath"); 
+  confirmBalance();
+  halt();
 }
 
-void disableCard() {
-  cardEnabled = false;  // Disable card reading
+bool authenticateCard() {
+  MFRC522::StatusCode status;
+  Serial.println(F("Authenticating using key A"));
+  status = (MFRC522::StatusCode)rfid.PCD_Authenticate(
+    MFRC522::PICC_CMD_MF_AUTH_KEY_A, trailerBlock, &key, &(rfid.uid));
+
+  if (status != MFRC522::STATUS_OK) {
+    Serial.print(F("PCD_Authenticate() failed: "));
+    Serial.println(rfid.GetStatusCodeName(status));
+    return false;
+  }
+  return true;
 }
 
-void readCard() {
-  if (!cardEnabled) {
-    isCardDetected = false;
-    return;
+int readBalance() {
+  byte buffer[18];
+  byte size = sizeof(buffer);
+  MFRC522::StatusCode status;
+
+  Serial.print(F("Reading balance from card (block "));
+  Serial.print(block);
+  Serial.println(F(")"));
+  status = (MFRC522::StatusCode)rfid.MIFARE_Read(block, buffer, &size);
+
+  if (status != MFRC522::STATUS_OK) {
+    Serial.print(F("MIFARE_Read() failed: "));
+    Serial.println(rfid.GetStatusCodeName(status));
+    return -1;  // Error indicator
   }
 
-  if (!rfid.PICC_IsNewCardPresent()) {
-    isCardDetected = false;
-    digitalWrite(LED_PIN, LOW);
-    return;
-  }
+  int currentAmount = (buffer[0] << 8) | buffer[1];
+  Serial.print(F("Current amount: "));
+  Serial.println(currentAmount);
+  return currentAmount;
+}
 
-  if (!rfid.PICC_ReadCardSerial()) {
-    Serial.println("Failed to read card serial.");
-    isCardDetected = false;
-    return;
-  }
+void writeBalance(int newAmount) {
+  byte balanceData[16] = { 0 };
+  balanceData[0] = (newAmount >> 8) & 0xFF;  // High byte
+  balanceData[1] = newAmount & 0xFF;         // Low byte
 
-  Serial.println("Card detected and read successfully!");
-  isCardDetected = true;
+  Serial.print(F("Writing updated amount "));
+  Serial.print(newAmount);
+  Serial.print(F(" to card (block "));
+  Serial.print(block);
+  Serial.println(F(")"));
+
+  MFRC522::StatusCode status = (MFRC522::StatusCode)rfid.MIFARE_Write(block, balanceData, 16);
+  if (status != MFRC522::STATUS_OK) {
+    Serial.print(F("MIFARE_Write() failed: "));
+    Serial.println(rfid.GetStatusCodeName(status));
+  } else {
+    Serial.println(F("Write finished"));
+  }
+}
+
+void confirmBalance() {
+  byte buffer[18];
+  byte size = sizeof(buffer);
+  MFRC522::StatusCode status;
+
+  Serial.print(F("Reading updated amount from card (block "));
+  Serial.print(block);
+  Serial.println(F(")"));
+  status = (MFRC522::StatusCode)rfid.MIFARE_Read(block, buffer, &size);
+
+  if (status != MFRC522::STATUS_OK) {
+    Serial.print(F("MIFARE_Read() failed: "));
+    Serial.println(rfid.GetStatusCodeName(status));
+  } else {
+    int updatedAmount = (buffer[0] << 8) | buffer[1];
+    Serial.print(F("Updated amount read: "));
+    Serial.println(updatedAmount);
+  }
+}
+
+void halt() {
+  Serial.println(F("Halting loop"));
   rfid.PICC_HaltA();
   rfid.PCD_StopCrypto1();
-  delay(1000);
+}
+
+void dump_byte_array(byte *buffer, byte bufferSize) {
+  for (byte i = 0; i < bufferSize; i++) {
+    Serial.print(buffer[i] < 0x10 ? " 0" : " ");
+    Serial.print(buffer[i], HEX);
+  }
+  Serial.println();
+}
+
+void dump_byte_array_decimal(byte *buffer, byte bufferSize) {
+  for (byte i = 0; i < bufferSize; i++) {
+    if (buffer[i] != 0x00) {
+      Serial.print(buffer[i], DEC);
+    }
+  }
+  Serial.println(F(""));
 }
 
 void updateProduct(int index, int quantity) {
@@ -497,12 +616,25 @@ int getQuantityFromUser() {
 
   return quantity;  // Return the final quantity
 }
+float TotlatIncome() {
+  for (int i = 0; i < cartCount; i++) {
+    int index = cartItems[i].index;
+    int quantity = cartItems[i].quantity;
+    float itemTotal = prices[index] * quantity;
+    Serial.print(snacks[index]);
+    Serial.print(": ");
+    Serial.print(quantity);
+    Serial.print(" units, ");
+    Serial.print(itemTotal);
+    Serial.println(" Bath");
+    totalIncome += itemTotal;  // Accumulate total income
+  }
+  return totalIncome;
+}
 
 void processTransaction() {
-  digitalWrite(LED_PIN, HIGH);  // Turn on the LED
   displayMessage("Processing...");
-  delay(1000);                 // Wait for 1 second
-  digitalWrite(LED_PIN, LOW);  // Turn off the LED
+  delay(1000);  // Wait for 1 second
   displayMessage("Thank you!");
   delay(1000);  // Wait for 1 second
 
@@ -557,6 +689,7 @@ void processTransaction() {
   delay(1000);  // Wait for 1 second
 
   setup();  // Reinitialize or reset as needed
+  return totalIncome;
 }
 
 void restockProduct() {
