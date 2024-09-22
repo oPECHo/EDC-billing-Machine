@@ -50,12 +50,11 @@ struct CartItem {
 
 tmElements_t tm;  //for DS1307
 
-bool timeout = false;         // ตัวแปรตรวจสอบการหมดเวลา
-bool dotOn = true;            // สถานะปัจจุบันของจุดสองจุด
-bool countingDown = false;    // ตัวแปรสถานะสำหรับการนับถอยหลัง
+bool timeout = false;       // ตัวแปรตรวจสอบการหมดเวลา
+bool dotOn = true;          // สถานะปัจจุบันของจุดสองจุด
+bool countingDown = false;  // ตัวแปรสถานะสำหรับการนับถอยหลัง
 bool getTime(const char *str) {
   int Hour, Min, Sec;
-
   if (sscanf(str, "%d:%d:%d", &Hour, &Min, &Sec) != 3) return false;
   tm.Hour = Hour;
   tm.Minute = Min;
@@ -63,6 +62,7 @@ bool getTime(const char *str) {
   return true;
 }
 
+// Function to parse date from string
 bool getDate(const char *str) {
   char Month[12];
   int Day, Year;
@@ -132,7 +132,7 @@ void setup() {
 }
 
 void initial() {
-  pinMode(sw_restock, INPUT);   // Set pin for restocking as input
+  pinMode(sw_restock, INPUT);  // Set pin for restocking as input
 
   lcd.init();                          // Initialize LCD
   lcd.backlight();                     // Turn on LCD backlight
@@ -171,27 +171,15 @@ void initial() {
   bool parse = false;
   bool config = false;
 
-  if (getDate(__DATE__) && getTime(__TIME__)) {
-    parse = true;
-    if (RTC.write(tm)) {
-      config = true;
-    }
-  }
 
-  if (parse && config) {
+  // Set DS1307 to compile time and date
+  if (syncRTCWithCompileTime()) {
     Serial.print("DS1307 configured Time=");
     Serial.print(__TIME__);
     Serial.print(", Date=");
     Serial.println(__DATE__);
-  } else if (parse) {
-    Serial.println("DS1307 Communication Error :-{");
-    Serial.println("Please check your circuitry");
   } else {
-    Serial.print("Could not parse info from the compiler, Time=\"");
-    Serial.print(__TIME__);
-    Serial.print("\", Date=\"");
-    Serial.print(__DATE__);
-    Serial.println("\"");
+    Serial.println("DS1307 Communication Error or Parse Failure");
   }
 
   // Timer initialization for countdown
@@ -202,6 +190,13 @@ void initial() {
   sei();                  // Enable global interrupt
 }
 
+bool syncRTCWithCompileTime() {
+  bool parsed = getDate(__DATE__) && getTime(__TIME__);
+  if (parsed && RTC.write(tm)) {
+    return true;
+  }
+  return false;
+}
 
 void loop() {
   unsigned long currentTime = millis();  // รับเวลาปัจจุบันจาก millis()
@@ -229,7 +224,13 @@ void loop() {
         } else if (key == 'C') {
           CancelProductsInCart();
         } else if (key == 'D') {
-          setProductAmount(buttonPressed);
+          if (buttonPressed >= 0) {  // ตรวจสอบว่ามีการกดปุ่ม '1'-'9' ก่อนหน้านี้
+            setProductAmount(buttonPressed);
+          } else {
+            displayMessage("Select product");  // แสดงข้อความถ้ายังไม่ได้เลือกสินค้า
+          }
+        } else if (key == '#') {
+          setTime();              // เรียกฟังก์ชันสำหรับตั้งเวลา
         } else if (key == '*') {  // ถ้าปุ่มที่กดเป็น '*'
           displayCartTotal();     // แสดงยอดรวมของตะกร้า
           countingDown = false;   // หยุดการนับถอยหลัง
@@ -241,7 +242,7 @@ void loop() {
           lcd.setCursor(0, 1);                   // ตั้งตำแหน่ง cursor เป็น (0,1)
           lcd.print("Please try again");         // แสดงข้อความ "Please try again"
           clearEEPROM();                         // รีเซ็ตระบบ
-          displayMessage("  Return to  ");
+          displayMessage("   Return to   ");
           lcd.setCursor(0, 1);
           lcd.print("   Main Menu   ");
           setup();
@@ -288,10 +289,78 @@ void loop() {
     lcd.print("Please try again");     // แสดงข้อความ "Please try again"
     timeout = false;                   // รีเซ็ตสถานะ timeout
     countingDown = false;
+    CancelProductsInCart();
     displayMessage("   Return to   ");
     lcd.setCursor(0, 1);
     lcd.print("   Main Menu   ");
     initial();
+  }
+}
+
+void setTime() {
+  int hour = -1, minute = -1;
+  char input[3];  // ตัวแปรสำหรับเก็บชั่วโมงหรือ นาที
+  int inputIndex = 0;
+
+  lcd.clear();
+  lcd.print("Set Hour: ");
+
+  // ตั้งชั่วโมง
+  lcd.setCursor(0, 1);  // ตั้งตำแหน่ง cursor สำหรับ input
+  while (inputIndex < 2) {
+    char key = keypad.getKey();
+    if (key && isDigit(key)) {
+      input[inputIndex++] = key;
+      input[inputIndex] = '\0';  // แก้ไข string ให้อยู่ในรูปแบบที่ถูกต้อง
+      lcd.setCursor(0, 1);       // ตั้งตำแหน่ง cursor บน LCD
+      lcd.print(input);          // แสดงชั่วโมงที่ป้อน
+    }
+  }
+  hour = atoi(input);  // แปลง input เป็นจำนวนเต็ม
+
+  inputIndex = 0;  // รีเซ็ต index สำหรับการป้อนนาที
+  lcd.clear();
+  lcd.print("Set Minute: ");
+  lcd.setCursor(0, 1);  // ตั้งตำแหน่ง cursor สำหรับ input
+
+  // ตั้งนาที
+  while (inputIndex < 2) {
+    char key = keypad.getKey();
+    if (key && isDigit(key)) {
+      input[inputIndex++] = key;
+      input[inputIndex] = '\0';
+      lcd.setCursor(0, 1);  // ตั้งตำแหน่ง cursor บน LCD
+      lcd.print(input);     // แสดงนาทีที่ป้อน
+    }
+  }
+  minute = atoi(input);  // แปลง input เป็นจำนวนเต็ม
+
+  // ตั้งค่าตัวแปร tm
+  tm.Hour = hour;
+  tm.Minute = minute;
+
+  // เขียนเวลาไปยัง RTC
+  if (RTC.write(tm)) {
+    lcd.clear();
+    lcd.print("Time set: ");
+    lcd.setCursor(10, 0);  // ตั้งตำแหน่ง cursor สำหรับแสดงเวลา
+    lcd.print(hour);
+    lcd.print(":");
+    lcd.print(minute);
+    lcd.clear();
+    lcd.setCursor(0, 0);                 // Clear LCD display
+    lcd.print(" Welcome to EDC ");  // Display welcome message on LCD
+    lcd.setCursor(0, 1);                 // Set cursor position to (0,1)
+    lcd.print("billing Machine");        // Display "Vending Machine" on LCD
+    return;
+  } else {
+    lcd.print("Failed to set time");
+    lcd.clear();                         // Clear LCD display
+    lcd.setCursor(0, 0);
+    lcd.print(" Welcome to EDC ");  // Display welcome message on LCD
+    lcd.setCursor(0, 1);                 // Set cursor position to (0,1)
+    lcd.print("billing Machine");        // Display "Vending Machine" on LCD
+    return;
   }
 }
 
@@ -344,6 +413,7 @@ void displayOutOfStock(int index) {
   lcd.print(snacks[index]);            // แสดงชื่อสินค้าบน LCD
   lcd.setCursor(0, 1);                 // ตั้งตำแหน่ง cursor เป็น (0,1)
   displayMessage("  OUT OF STOCK  ");  // แสดงข้อความ "OUT OF STOCK"
+  product_amount[index] = 0;
 }
 
 void displayMessage(String message) {
@@ -382,7 +452,7 @@ void processCard(float totalIncome) {
   lcd.print("Update amount: ");
   lcd.setCursor(0, 1);
   lcd.print(newAmount);
-  lcd.print(" Bath"); 
+  lcd.print(" Bath");
   confirmBalance();
   halt();
 }
@@ -495,23 +565,33 @@ void updateProduct(int index, int quantity) {
 
 void addItemToCart(int index, int quantity) {
   if (cartCount < MAX_CART_ITEMS && index >= 0 && index < 9) {  // ตรวจสอบว่าตะกร้าพร้อมใช้งาน
-    if (product_amount[index] >= quantity) {                    // ตรวจสอบจำนวนสินค้าในสต๊อก
-      cartItems[cartCount].index = index;                       // บันทึก index สินค้า
-      cartItems[cartCount].quantity = quantity;                 // บันทึกจำนวนสินค้าที่สั่ง
-      cartTotal += prices[index] * quantity;                    // เพิ่มราคาสินค้าลงในยอดรวม
-      updateProduct(index, quantity);                           // อัปเดตจำนวนสินค้าในสต๊อก
-      cartCount++;                                              // เพิ่มจำนวนสินค้าต่อไปในตะกร้า
-      displayMessage("Item added");                             // แสดงข้อความการเพิ่มสินค้า
+    if (quantity > 0) {                                         // ตรวจสอบว่า quantity ไม่เป็น 0
+      if (product_amount[index] >= quantity) {                  // ตรวจสอบจำนวนสินค้าในสต๊อก
+        cartItems[cartCount].index = index;                     // บันทึก index สินค้า
+        cartItems[cartCount].quantity = quantity;               // บันทึกจำนวนสินค้าที่สั่ง
+        cartTotal += prices[index] * quantity;                  // เพิ่มราคาสินค้าลงในยอดรวม
+        updateProduct(index, quantity);                         // อัปเดตจำนวนสินค้าในสต๊อก
+        cartCount++;                                            // เพิ่มจำนวนสินค้าต่อไปในตะกร้า
+        displayMessage("Item added");                           // แสดงข้อความการเพิ่มสินค้า
+      } else {
+        displayMessage("Not enough stock");  // แสดงข้อความเมื่อสต๊อกไม่เพียงพอ
+      }
     } else {
-      displayMessage("Not enough stock");  // แสดงข้อความเมื่อสต๊อกไม่เพียงพอ
+      displayMessage("Canceled");  // แสดงข้อความเมื่อ quantity เป็น 0
     }
   } else {
     displayMessage("Cart full");  // แสดงข้อความเมื่อเต็มตะกร้า
   }
 }
 
-
 void CancelProductsInCart() {
+  if (cartCount == 0) {  // ตรวจสอบว่าตะกร้าเป็นศูนย์
+    displayMessage("No products");
+    lcd.setCursor(0, 1);
+    lcd.print("to Cancel");
+    return;  // ออกจากฟังก์ชัน
+  }
+
   for (int i = 0; i < cartCount; i++) {
     int index = cartItems[i].index;
     int quantity = cartItems[i].quantity;
@@ -529,7 +609,6 @@ void CancelProductsInCart() {
   lcd.print("Returned");
 }
 
-
 void setProductAmount(int index) {
   // Temporary variable to store the quantity input from the Keypad
   int quantity = 0;
@@ -541,25 +620,40 @@ void setProductAmount(int index) {
 
   // Loop to get quantity from Keypad
   while (!inputComplete) {
-    char key = keypad.getKey();  // Read the key pressed on the Keypad
+    char key = keypad.getKey();
 
     if (key) {
-      if (key >= '0' && key <= '9') {  // If the key pressed is a digit
-        int num = key - '0';           // Convert character to integer
-        quantity = quantity + num * multiplier;
-        multiplier *= 10;
+      if (key >= '0' && key <= '9') {
+        // หากป้อนครั้งแรก ให้เริ่มที่ 0
+        if (multiplier == 1) {
+          quantity = 0;  // เริ่มต้น quantity ใหม่
+        }
 
-        // Display the current quantity input
-        lcd.setCursor(0, 1);
-        lcd.print("Qty: ");
-        lcd.print(quantity);
+        int num = key - '0';
 
-      } else if (key == 'A') {  // If the '#' key is pressed, finish input
+        // ตรวจสอบว่า quantity จะไม่เกินขีดจำกัดที่กำหนด (เช่น 9999)
+        if (quantity < 999) {
+          quantity = quantity * 10 + num;  // ปรับการคำนวณ
+          lcd.setCursor(0, 1);
+          lcd.print("Qty: ");
+          lcd.print(quantity);
+          multiplier = 10;  // ตั้งค่า multiplier เป็น 10 สำหรับเลขที่ต่อไป
+        } else {
+          displayMessage("Max 4 digits");  // แสดงข้อความเมื่อเกิน 4 หลัก
+          quantity = 0;
+          displayMessage("Canceled");
+          inputComplete = true;  // ออกจากลูป
+          delay(1000);           // แสดงข้อความเป็นเวลา 1 วินาที
+        }
+      } else if (key == 'A') {
         inputComplete = true;
-      } else if (key == 'C') {  // If '*' is pressed, cancel and reset
+      } else if (key == 'C') {
         displayMessage("Canceled");
-        delay(1000);  // Show cancellation for a short period
-        return;
+        quantity = 0;
+        inputComplete = true;
+      } else {
+        displayMessage("Invalid input");
+        delay(1000);  // แสดงข้อความผิดพลาดเป็นเวลา 1 วินาที
       }
     }
   }
@@ -580,7 +674,9 @@ void setProductAmount(int index) {
     delay(2000);  // Display for 2 seconds
   } else {
     displayMessage("Invalid input");
-    delay(2000);  // Show error message for 2 seconds
+    lcd.clear();
+    initial();
+    return;
   }
 }
 
@@ -596,23 +692,38 @@ int getQuantityFromUser() {
 
     if (key) {
       if (key >= '0' && key <= '9') {
+        // หากป้อนครั้งแรก ให้เริ่มที่ 0
+        if (multiplier == 1) {
+          quantity = 0;  // เริ่มต้น quantity ใหม่
+        }
+
         int num = key - '0';
-        quantity = quantity + num * multiplier;
-        multiplier *= 10;
-        lcd.setCursor(0, 1);
-        lcd.print("Qty: ");
-        lcd.print(quantity);
+        // ตรวจสอบว่า quantity จะไม่เกินขีดจำกัดที่กำหนด (เช่น 9999)
+        if (quantity < 999) {
+          quantity = quantity * 10 + num;  // ปรับการคำนวณ
+          lcd.setCursor(0, 1);
+          lcd.print("Qty: ");
+          lcd.print(quantity);
+          multiplier = 10;  // ตั้งค่า multiplier เป็น 10 สำหรับเลขที่ต่อไป
+        } else {
+          displayMessage("Max 4 digits");  // แสดงข้อความเมื่อเกิน 4 หลัก
+          quantity = 0;                    // รีเซ็ต quantity หากยกเลิก
+          inputComplete = true;            // ออกจากลูป
+          delay(1000);                     // แสดงข้อความเป็นเวลา 1 วินาที
+        }
       } else if (key == 'A') {
         inputComplete = true;
       } else if (key == 'C') {
         displayMessage("Canceled");
-        delay(1000);
+        quantity = 0;          // รีเซ็ต quantity หากยกเลิก
+        inputComplete = true;  // ออกจากลูป
       } else {
         displayMessage("Invalid input");
-        delay(1000);  // Show error message for 2 seconds
+        setup();
       }
     }
   }
+
 
   return quantity;  // Return the final quantity
 }
@@ -621,12 +732,6 @@ float TotlatIncome() {
     int index = cartItems[i].index;
     int quantity = cartItems[i].quantity;
     float itemTotal = prices[index] * quantity;
-    Serial.print(snacks[index]);
-    Serial.print(": ");
-    Serial.print(quantity);
-    Serial.print(" units, ");
-    Serial.print(itemTotal);
-    Serial.println(" Bath");
     totalIncome += itemTotal;  // Accumulate total income
   }
   return totalIncome;
