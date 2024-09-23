@@ -217,9 +217,11 @@ void loop() {
           buttonPressed = buttonIndex;        // ตั้งค่าปุ่มที่กดเพื่อประมวลผลการทำรายการ
           displaySnackAndPrice(buttonIndex);  // แสดงข้อมูลสินค้าและราคา
           // Serial.println(key);
+          soundButton();
           count = 30;
-          countingDown = true;                     // ตั้งค่าเป็นโหมดการนับถอยหลัง
-        } else if (key == 'A') {                   // ถ้าปุ่มที่กดเป็น 'A'
+          countingDown = true;    // ตั้งค่าเป็นโหมดการนับถอยหลัง
+        } else if (key == 'A') {  // ถ้าปุ่มที่กดเป็น 'A'
+          soundSubmit();
           int quantity = 1;                        // Function to get quantity input from the user
           addItemToCart(buttonPressed, quantity);  // Call the updated function with quantity
         } else if (key == 'B') {                   // ถ้าปุ่มที่กดเป็น B
@@ -280,7 +282,6 @@ void loop() {
     } else {
       count = 0;                            // รีเซ็ตการนับถอยหลัง
       display.showNumberDec(count, false);  // แสดงการนับถอยหลังเป็น 0 บน TM1637
-      // soundBuzzer();
       Serial.println(F("A new card has appeared"));
       totalIncome = TotlatIncome();  // รับค่าที่คืนกลับ
       processCard(totalIncome);      // ส่ง TotalIncome ไปยัง processCard
@@ -577,20 +578,36 @@ void soundBuzzer() {
   // Create a "peep" sound
   for (int i = 0; i < 3; i++) {  // Repeat 3 times for a peep sound
     tone(BUZZER_PIN, 8000);      // Turn the buzzer on
-    delay(50);                  // On for 50 milliseconds
+    delay(50);                   // On for 50 milliseconds
     noTone(BUZZER_PIN);          // Turn the buzzer off
-    delay(50);                  // Off for 50 milliseconds
+    delay(50);                   // Off for 50 milliseconds
   }
 }
 
 void soundRejection() {
   // Create a rejection sound (longer and different pattern)
-  for (int i = 0; i < 2; i++) {      // Repeat 2 times for a rejection sound
-    tone(BUZZER_PIN, 4000);  // Turn the buzzer on
-    delay(50);                      // On for 200 milliseconds
-    noTone(BUZZER_PIN);   // Turn the buzzer off
-    delay(50);                      // Off for 100 milliseconds
+  for (int i = 0; i < 2; i++) {  // Repeat 2 times for a rejection sound
+    tone(BUZZER_PIN, 4000);      // Turn the buzzer on
+    delay(50);                   // On for 200 milliseconds
+    noTone(BUZZER_PIN);          // Turn the buzzer off
+    delay(50);                   // Off for 100 milliseconds
   }
+}
+
+void soundSubmit() {
+  // Create a rejection sound (longer and different pattern)
+  tone(BUZZER_PIN, 2500);  // Turn the buzzer on
+  delay(50);               // On for 200 milliseconds
+  noTone(BUZZER_PIN);      // Turn the buzzer off
+  delay(50);               // Off for 100 milliseconds
+}
+
+void soundButton() {
+  // Create a rejection sound (longer and different pattern)
+  tone(BUZZER_PIN, 1000);  // Turn the buzzer on
+  delay(50);               // On for 200 milliseconds
+  noTone(BUZZER_PIN);      // Turn the buzzer off
+  delay(50);               // Off for 100 milliseconds
 }
 
 void dump_byte_array(byte *buffer, byte bufferSize) {
@@ -673,7 +690,7 @@ void setProductAmount(int index) {
         if (multiplier == 1) {
           quantity = 0;  // เริ่มต้น quantity ใหม่
         }
-
+        soundButton();
         int num = key - '0';
 
         // ตรวจสอบว่า quantity จะไม่เกินขีดจำกัดที่กำหนด (เช่น 999)
@@ -692,6 +709,7 @@ void setProductAmount(int index) {
           delay(1000);           // แสดงข้อความเป็นเวลา 1 วินาที
         }
       } else if (key == 'A') {
+        soundSubmit();
         inputComplete = true;
       } else if (key == 'C') {
         displayMessage("Canceled");
@@ -751,7 +769,7 @@ int getQuantityFromUser() {
         if (multiplier == 1) {
           quantity = 0;  // เริ่มต้น quantity ใหม่
         }
-
+        soundButton();
         int num = key - '0';
         // ตรวจสอบว่า quantity จะไม่เกินขีดจำกัดที่กำหนด (เช่น 9999)
         if (quantity < 999) {
@@ -767,6 +785,7 @@ int getQuantityFromUser() {
           delay(1000);                     // แสดงข้อความเป็นเวลา 1 วินาที
         }
       } else if (key == 'A') {
+        soundSubmit();
         inputComplete = true;
       } else if (key == 'C') {
         displayMessage("Canceled");
