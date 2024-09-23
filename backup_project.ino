@@ -62,6 +62,7 @@ bool getTime(const char *str) {
   return true;
 }
 
+bool statusTransaction = true;
 // Function to parse date from string
 bool getDate(const char *str) {
   char Month[12];
@@ -280,7 +281,15 @@ void loop() {
       totalIncome = TotlatIncome();  // รับค่าที่คืนกลับ
       processCard(totalIncome);      // ส่ง TotalIncome ไปยัง processCard
       delay(1500);
-      processTransaction();
+      if (statusTransaction) {
+        processTransaction();  // Allow payment if statusTransaction is true
+      } else {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Transaction denied");
+        lcd.setCursor(0, 1);
+        lcd.print("Insufficient funds");
+      }
       totalIncome = 0.00;
     }
   } else {
@@ -348,18 +357,18 @@ void setTime() {
     lcd.print(":");
     lcd.print(minute);
     lcd.clear();
-    lcd.setCursor(0, 0);                 // Clear LCD display
+    lcd.setCursor(0, 0);            // Clear LCD display
     lcd.print(" Welcome to EDC ");  // Display welcome message on LCD
-    lcd.setCursor(0, 1);                 // Set cursor position to (0,1)
-    lcd.print("billing Machine");        // Display "Vending Machine" on LCD
+    lcd.setCursor(0, 1);            // Set cursor position to (0,1)
+    lcd.print("billing Machine");   // Display "Vending Machine" on LCD
     return;
   } else {
     lcd.print("Failed to set time");
-    lcd.clear();                         // Clear LCD display
+    lcd.clear();  // Clear LCD display
     lcd.setCursor(0, 0);
     lcd.print(" Welcome to EDC ");  // Display welcome message on LCD
-    lcd.setCursor(0, 1);                 // Set cursor position to (0,1)
-    lcd.print("billing Machine");        // Display "Vending Machine" on LCD
+    lcd.setCursor(0, 1);            // Set cursor position to (0,1)
+    lcd.print("billing Machine");   // Display "Vending Machine" on LCD
     return;
   }
 }
@@ -425,9 +434,7 @@ void displayMessage(String message) {
 }
 
 void processCard(float totalIncome) {
-  if (block != 4) {
-    Serial.print(F("Invalid block: "));
-    Serial.println(block);
+  if (!validateBlock()) {
     halt();
     return;
   }
@@ -440,13 +447,16 @@ void processCard(float totalIncome) {
   int currentAmount = readBalance();
   if (currentAmount < 0) return;
 
-  int newAmount = currentAmount - totalIncome;
-  if (newAmount < 0) {
-    Serial.println(F("Amount after decrease is negative. Setting to 0."));
-    newAmount = 0;
+  int newAmount = 0;
+  if (!calculateNewAmount(currentAmount, totalIncome, newAmount)) {
+    Serial.println(F("Insufficient funds, please top up"));
+    statusTransaction = false;
+    halt();
+    return;  // Stop further processing if balance is insufficient
   }
 
   writeBalance(newAmount);
+  statusTransaction = true;
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("Update amount: ");
@@ -455,6 +465,23 @@ void processCard(float totalIncome) {
   lcd.print(" Bath");
   confirmBalance();
   halt();
+}
+
+void prepareKey() {
+  for (byte i = 0; i < 6; i++) {
+    key.keyByte[i] = 0xFF;
+  }
+  Serial.print(F("Using key:"));
+  dump_byte_array(key.keyByte, MFRC522::MF_KEY_SIZE);
+}
+
+bool validateBlock() {
+  if (block != 4) {
+    Serial.print(F("Invalid block, are you sure you want to change it?: "));
+    Serial.println(block);
+    return false;
+  }
+  return true;
 }
 
 bool authenticateCard() {
@@ -491,6 +518,16 @@ int readBalance() {
   Serial.print(F("Current amount: "));
   Serial.println(currentAmount);
   return currentAmount;
+}
+
+bool calculateNewAmount(int currentAmount, int totalIncome, int &newAmount) {
+  if (currentAmount < totalIncome) {
+    Serial.println(F("Current amount is less than the decrease amount. Rejecting card."));
+    return false;  // Reject the card
+  }
+
+  newAmount = currentAmount - totalIncome;
+  return true;  // Accept the card
 }
 
 void writeBalance(int newAmount) {
@@ -545,15 +582,6 @@ void dump_byte_array(byte *buffer, byte bufferSize) {
     Serial.print(buffer[i], HEX);
   }
   Serial.println();
-}
-
-void dump_byte_array_decimal(byte *buffer, byte bufferSize) {
-  for (byte i = 0; i < bufferSize; i++) {
-    if (buffer[i] != 0x00) {
-      Serial.print(buffer[i], DEC);
-    }
-  }
-  Serial.println(F(""));
 }
 
 void updateProduct(int index, int quantity) {
@@ -631,15 +659,16 @@ void setProductAmount(int index) {
 
         int num = key - '0';
 
-        // ตรวจสอบว่า quantity จะไม่เกินขีดจำกัดที่กำหนด (เช่น 9999)
-        if (quantity < 999) {
+        // ตรวจสอบว่า quantity จะไม่เกินขีดจำกัดที่กำหนด (เช่น 999)
+        if (quantity < 99) {
           quantity = quantity * 10 + num;  // ปรับการคำนวณ
           lcd.setCursor(0, 1);
           lcd.print("Qty: ");
           lcd.print(quantity);
           multiplier = 10;  // ตั้งค่า multiplier เป็น 10 สำหรับเลขที่ต่อไป
         } else {
-          displayMessage("Max 4 digits");  // แสดงข้อความเมื่อเกิน 4 หลัก
+          displayMessage("Max 2 digits");  // แสดงข้อความเมื่อเกิน 4 หลัก
+          delay(500);
           quantity = 0;
           displayMessage("Canceled");
           inputComplete = true;  // ออกจากลูป
@@ -658,12 +687,21 @@ void setProductAmount(int index) {
     }
   }
 
-  // Check if the quantity is valid
   if (quantity > 0 && index >= 0 && index < 9) {
+    // Check if updating will exceed the maximum limit of 99
+    if (product_amount[index] + quantity > 99) {
+      displayMessage("Max limit is 99");
+      delay(1000);
+      lcd.clear();
+      initial();
+      return;
+    }
+
     // Update product amount
     product_amount[index] += quantity;
 
     saveProductAmountsToEEPROM();
+
     // Display update confirmation
     displayMessage("Updated");
     lcd.setCursor(0, 1);
