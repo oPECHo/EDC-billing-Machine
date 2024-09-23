@@ -7,7 +7,7 @@ import re
 ser = serial.Serial("/dev/ttyS1", 38400)  # Added timeout for better read handling
 
 # Line Notify configuration
-line_notify_token = '[YOUR_LINE_NOTIFY_TOKEN]'
+line_notify_token = 'hbj3zVjbPd4gF30CrzGfJ2PmSv0548eKm5B0jqP5lfM'
 line_notify_url = 'https://notify-api.line.me/api/notify'
 
 # ThingSpeak configuration

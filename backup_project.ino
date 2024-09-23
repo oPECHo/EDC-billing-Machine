@@ -11,6 +11,7 @@
 
 #define DIO 2              // กำหนดหมายเลขพินสำหรับ DIO ของ TM1637
 #define CLK 3              // กำหนดหมายเลขพินสำหรับ CLK ของ TM1637
+#define BUZZER_PIN 8       // Define the buzzer pin
 #define RST_PIN 9          // กำหนดหมายเลขพินสำหรับการรีเซ็ตของ RFID
 #define SS_PIN 10          // กำหนดหมายเลขพินสำหรับ SS (Slave Select) ของ RFID
 #define I2CADDR 0x20       // กำหนดที่อยู่ I2C สำหรับ Keypad
@@ -151,6 +152,8 @@ void initial() {
     key.keyByte[i] = 0xFF;
   }
 
+  pinMode(BUZZER_PIN, OUTPUT);  // Set buzzer pin as output
+
   Serial.println(F("====================================================="));
   Serial.println(F("SET CARD BALANCE"));
   Serial.println(F("====================================================="));
@@ -277,9 +280,11 @@ void loop() {
     } else {
       count = 0;                            // รีเซ็ตการนับถอยหลัง
       display.showNumberDec(count, false);  // แสดงการนับถอยหลังเป็น 0 บน TM1637
+      // soundBuzzer();
       Serial.println(F("A new card has appeared"));
       totalIncome = TotlatIncome();  // รับค่าที่คืนกลับ
       processCard(totalIncome);      // ส่ง TotalIncome ไปยัง processCard
+      soundBuzzer();
       delay(1500);
       if (statusTransaction) {
         processTransaction();  // Allow payment if statusTransaction is true
@@ -438,7 +443,6 @@ void processCard(float totalIncome) {
     halt();
     return;
   }
-
   Serial.print(F("Card UID: "));
   dump_byte_array(rfid.uid.uidByte, rfid.uid.size);
 
@@ -465,14 +469,6 @@ void processCard(float totalIncome) {
   lcd.print(" Bath");
   confirmBalance();
   halt();
-}
-
-void prepareKey() {
-  for (byte i = 0; i < 6; i++) {
-    key.keyByte[i] = 0xFF;
-  }
-  Serial.print(F("Using key:"));
-  dump_byte_array(key.keyByte, MFRC522::MF_KEY_SIZE);
 }
 
 bool validateBlock() {
@@ -523,6 +519,7 @@ int readBalance() {
 bool calculateNewAmount(int currentAmount, int totalIncome, int &newAmount) {
   if (currentAmount < totalIncome) {
     Serial.println(F("Current amount is less than the decrease amount. Rejecting card."));
+    soundRejection();
     return false;  // Reject the card
   }
 
@@ -574,6 +571,26 @@ void halt() {
   Serial.println(F("Halting loop"));
   rfid.PICC_HaltA();
   rfid.PCD_StopCrypto1();
+}
+
+void soundBuzzer() {
+  // Create a "peep" sound
+  for (int i = 0; i < 3; i++) {  // Repeat 3 times for a peep sound
+    tone(BUZZER_PIN, 8000);      // Turn the buzzer on
+    delay(50);                  // On for 50 milliseconds
+    noTone(BUZZER_PIN);          // Turn the buzzer off
+    delay(50);                  // Off for 50 milliseconds
+  }
+}
+
+void soundRejection() {
+  // Create a rejection sound (longer and different pattern)
+  for (int i = 0; i < 2; i++) {      // Repeat 2 times for a rejection sound
+    tone(BUZZER_PIN, 4000);  // Turn the buzzer on
+    delay(50);                      // On for 200 milliseconds
+    noTone(BUZZER_PIN);   // Turn the buzzer off
+    delay(50);                      // Off for 100 milliseconds
+  }
 }
 
 void dump_byte_array(byte *buffer, byte bufferSize) {
