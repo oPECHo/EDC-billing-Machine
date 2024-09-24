@@ -39,10 +39,6 @@ const byte block = 4;
 const byte trailerBlock = 7;
 
 TM1637Display display(CLK, DIO);  // สร้างวัตถุ TM1637Display
-const char *monthName[12] = {
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-};
 
 struct CartItem {
   int index;     // ตำแหน่ง index ของสินค้า
@@ -54,32 +50,9 @@ tmElements_t tm;  //for DS1307
 bool timeout = false;       // ตัวแปรตรวจสอบการหมดเวลา
 bool dotOn = true;          // สถานะปัจจุบันของจุดสองจุด
 bool countingDown = false;  // ตัวแปรสถานะสำหรับการนับถอยหลัง
-bool getTime(const char *str) {
-  int Hour, Min, Sec;
-  if (sscanf(str, "%d:%d:%d", &Hour, &Min, &Sec) != 3) return false;
-  tm.Hour = Hour;
-  tm.Minute = Min;
-  tm.Second = Sec;
-  return true;
-}
 
 bool statusTransaction = true;
 // Function to parse date from string
-bool getDate(const char *str) {
-  char Month[12];
-  int Day, Year;
-  uint8_t monthIndex;
-
-  if (sscanf(str, "%s %d %d", Month, &Day, &Year) != 3) return false;
-  for (monthIndex = 0; monthIndex < 12; monthIndex++) {
-    if (strcmp(Month, monthName[monthIndex]) == 0) break;
-  }
-  if (monthIndex >= 12) return false;
-  tm.Day = Day;
-  tm.Month = monthIndex + 1;
-  tm.Year = CalendarYrToTm(Year);
-  return true;
-}
 
 float cartTotal = 0.0;  // ยอดรวมของสินค้าที่อยู่ในตะกร้า
 float product_sales[9] = { 0.0 };
@@ -121,6 +94,8 @@ void clearEEPROM() {
 }
 
 void setup() {
+  pinMode(sw_restock, INPUT);   // Set pin for restocking as input
+  pinMode(BUZZER_PIN, OUTPUT);  // Set buzzer pin as output
   Serial.begin(38400);
   while (!Serial)
     ;  // wait for Arduino Serial Monitor
@@ -129,20 +104,9 @@ void setup() {
   // Load product amounts from EEPROM
   loadProductAmountsFromEEPROM();
 
-  // Call initial to configure hardware and DS1307
   initial();
-}
-
-void initial() {
-  pinMode(sw_restock, INPUT);  // Set pin for restocking as input
-
-  lcd.init();                          // Initialize LCD
-  lcd.backlight();                     // Turn on LCD backlight
-  lcd.clear();                         // Clear LCD display
-  displayMessage(" Welcome to EDC ");  // Display welcome message on LCD
-  lcd.setCursor(0, 1);                 // Set cursor position to (0,1)
-  lcd.print("billing Machine");        // Display "Vending Machine" on LCD
-
+  Wire.begin();     // Initialize I2C communication
+  keypad.begin();   // Initialize Keypad_I2C
   SPI.begin();      // Initialize SPI communication
   rfid.PCD_Init();  // Initialize RFID
   rfid.PCD_DumpVersionToSerial();
@@ -152,40 +116,10 @@ void initial() {
     key.keyByte[i] = 0xFF;
   }
 
-  pinMode(BUZZER_PIN, OUTPUT);  // Set buzzer pin as output
-
-  Serial.println(F("====================================================="));
-  Serial.println(F("SET CARD BALANCE"));
-  Serial.println(F("====================================================="));
-  Serial.print(F("Using key:"));
   dump_byte_array(key.keyByte, MFRC522::MF_KEY_SIZE);
-
-  display.clear();           // Clear TM1637 Display
-  display.setBrightness(7);  // Set brightness of TM1637 Display
-  Wire.begin();              // Initialize I2C communication
-  keypad.begin();            // Initialize Keypad_I2C
-
+  // Call initial to configure hardware and DS1307
   timeout = false;  // Reset timeout status
   cartTotal = 0.0;
-
-  // Reset EEPROM to default values
-  // clearEEPROM();
-
-  // Set DS1307 to compile time and date
-  bool parse = false;
-  bool config = false;
-
-
-  // Set DS1307 to compile time and date
-  if (syncRTCWithCompileTime()) {
-    Serial.print("DS1307 configured Time=");
-    Serial.print(__TIME__);
-    Serial.print(", Date=");
-    Serial.println(__DATE__);
-  } else {
-    Serial.println("DS1307 Communication Error or Parse Failure");
-  }
-
   // Timer initialization for countdown
   TCCR1A = 0;             // Set Timer 1 to normal mode
   TCCR1B = (1 << CS12);   // Set prescaler to 64
@@ -194,15 +128,25 @@ void initial() {
   sei();                  // Enable global interrupt
 }
 
-bool syncRTCWithCompileTime() {
-  bool parsed = getDate(__DATE__) && getTime(__TIME__);
-  if (parsed && RTC.write(tm)) {
-    return true;
-  }
-  return false;
+void initial() {
+  lcd.init();                          // Initialize LCD
+  lcd.backlight();                     // Turn on LCD backlight
+  lcd.clear();                         // Clear LCD display
+  displayMessage(" Welcome to EDC ");  // Display welcome message on LCD
+  lcd.setCursor(0, 1);                 // Set cursor position to (0,1)
+  lcd.print("billing Machine");        // Display "Vending Machine" on LCD
+
+  Serial.println(F("====================================================="));
+  Serial.println(F("SET CARD BALANCE"));
+  Serial.println(F("====================================================="));
+  Serial.print(F("Using key:"));
+
+  display.clear();           // Clear TM1637 Display
+  display.setBrightness(7);  // Set brightness of TM1637 Display
 }
 
 void loop() {
+  RTC.read(tm);
   unsigned long currentTime = millis();  // รับเวลาปัจจุบันจาก millis()
   char key = keypad.getKey();            // อ่านค่าจาก Keypad
 
@@ -314,70 +258,94 @@ void loop() {
 
 void setTime() {
   int hour = -1, minute = -1;
-  char input[3];  // ตัวแปรสำหรับเก็บชั่วโมงหรือ นาที
+  char input[3];  // Variable to hold hour or minute input
   int inputIndex = 0;
 
-  lcd.clear();
-  lcd.print("Set Hour: ");
+  // Set hour
+  while (true) {
+    lcd.clear();
+    lcd.print("Set Hour: ");
+    inputIndex = 0;  // Reset index for input
+    lcd.setCursor(0, 1);  // Set cursor position for input
 
-  // ตั้งชั่วโมง
-  lcd.setCursor(0, 1);  // ตั้งตำแหน่ง cursor สำหรับ input
-  while (inputIndex < 2) {
-    char key = keypad.getKey();
-    if (key && isDigit(key)) {
-      input[inputIndex++] = key;
-      input[inputIndex] = '\0';  // แก้ไข string ให้อยู่ในรูปแบบที่ถูกต้อง
-      lcd.setCursor(0, 1);       // ตั้งตำแหน่ง cursor บน LCD
-      lcd.print(input);          // แสดงชั่วโมงที่ป้อน
+    // Input hour
+    while (inputIndex < 2) {
+      char key = keypad.getKey();
+      if (key && isDigit(key)) {
+        input[inputIndex++] = key;
+        input[inputIndex] = '\0';  // Null-terminate the string
+        lcd.setCursor(0, 1);       // Set cursor position on LCD
+        lcd.print(input);          // Display entered hour
+      }
+    }
+    hour = atoi(input);  // Convert input to integer
+
+    // Validate hour input
+    if (hour >= 0 && hour <= 23) {
+      break;  // Exit loop if hour is valid
+    } else {
+      lcd.clear();
+      lcd.print("Invalid Hour!");
+      delay(2000);  // Wait for a moment
     }
   }
-  hour = atoi(input);  // แปลง input เป็นจำนวนเต็ม
 
-  inputIndex = 0;  // รีเซ็ต index สำหรับการป้อนนาที
-  lcd.clear();
-  lcd.print("Set Minute: ");
-  lcd.setCursor(0, 1);  // ตั้งตำแหน่ง cursor สำหรับ input
+  // Set minute
+  while (true) {
+    lcd.clear();
+    lcd.print("Set Minute: ");
+    inputIndex = 0;  // Reset index for input
+    lcd.setCursor(0, 1);  // Set cursor position for input
 
-  // ตั้งนาที
-  while (inputIndex < 2) {
-    char key = keypad.getKey();
-    if (key && isDigit(key)) {
-      input[inputIndex++] = key;
-      input[inputIndex] = '\0';
-      lcd.setCursor(0, 1);  // ตั้งตำแหน่ง cursor บน LCD
-      lcd.print(input);     // แสดงนาทีที่ป้อน
+    // Input minute
+    while (inputIndex < 2) {
+      char key = keypad.getKey();
+      if (key && isDigit(key)) {
+        input[inputIndex++] = key;
+        input[inputIndex] = '\0';  // Null-terminate the string
+        lcd.setCursor(0, 1);       // Set cursor position on LCD
+        lcd.print(input);          // Display entered minute
+      }
+    }
+    minute = atoi(input);  // Convert input to integer
+
+    // Validate minute input
+    if (minute >= 0 && minute <= 59) {
+      break;  // Exit loop if minute is valid
+    } else {
+      lcd.clear();
+      lcd.print("Invalid Minute!");
+      delay(2000);  // Wait for a moment
     }
   }
-  minute = atoi(input);  // แปลง input เป็นจำนวนเต็ม
 
-  // ตั้งค่าตัวแปร tm
+  // Set tm variables
   tm.Hour = hour;
   tm.Minute = minute;
 
-  // เขียนเวลาไปยัง RTC
+  // Write time to RTC
   if (RTC.write(tm)) {
     lcd.clear();
     lcd.print("Time set: ");
-    lcd.setCursor(10, 0);  // ตั้งตำแหน่ง cursor สำหรับแสดงเวลา
+    lcd.setCursor(10, 0);  // Set cursor position to display time
     lcd.print(hour);
     lcd.print(":");
     lcd.print(minute);
-    lcd.clear();
-    lcd.setCursor(0, 0);            // Clear LCD display
-    lcd.print(" Welcome to EDC ");  // Display welcome message on LCD
-    lcd.setCursor(0, 1);            // Set cursor position to (0,1)
-    lcd.print("billing Machine");   // Display "Vending Machine" on LCD
-    return;
+    delay(2000);  // Wait for a moment to show the set time
   } else {
+    lcd.clear();
     lcd.print("Failed to set time");
-    lcd.clear();  // Clear LCD display
-    lcd.setCursor(0, 0);
-    lcd.print(" Welcome to EDC ");  // Display welcome message on LCD
-    lcd.setCursor(0, 1);            // Set cursor position to (0,1)
-    lcd.print("billing Machine");   // Display "Vending Machine" on LCD
-    return;
+    delay(2000);  // Wait for a moment
   }
+
+  // Display welcome message
+  lcd.clear();                    // Clear LCD display
+  lcd.setCursor(0, 0);           // Set cursor position to (0,0)
+  lcd.print(" Welcome to EDC ");  // Display welcome message on LCD
+  lcd.setCursor(0, 1);           // Set cursor position to (0,1)
+  lcd.print("billing Machine");   // Display "billing Machine" on LCD
 }
+
 
 void displayCurrentTime() {
   unsigned long currentMillis = millis();  // อ่านเวลาปัจจุบัน
